@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tailscale Remote",
+    "description": "Serve the Web GUI to your own tailnet only: a Tailscale-bound listener proxies to the loopback server, so a phone with Tailscale can open the page."
+  }
+}

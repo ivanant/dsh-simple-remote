@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tailscale 远程访问",
+    "description": "只对自有 tailnet 提供网页界面：在 Tailscale 网卡上开一个监听端口，反向代理到本机回环服务，手机连上 Tailscale 即可打开网页。"
+  }
+}
