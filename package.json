@@ -1,0 +1,42 @@
+{
+  "name": "dsh-simple-remote",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Expose the DeepSeek Harness Web GUI to your Tailscale tailnet, and to nothing else.",
+  "license": "MIT",
+  "author": "Ivan Lam",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "tailscale",
+    "remote-access"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "icon": "./icon.svg",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
