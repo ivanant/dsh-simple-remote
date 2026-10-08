@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Simple Remote",
-    "description": "Serve the Web GUI to your own tailnet only: a Tailscale-bound listener proxies to the loopback server, so a phone with Tailscale can open the page."
+    "title": "Simple Remote Access",
+    "description": "Install and it just works — no configuration needed. Connect your phone to Tailscale and open the page."
   }
 }
