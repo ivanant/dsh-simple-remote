@@ -1,0 +1,30 @@
+# The dsh-simple-remote bundle patch: a tailnet-only listener beside the
+# loopback Web GUI, plus the settings row that shows its address.
+#
+# `enabled` turns the whole bridge off; `autoToken` completes the login for a
+# phone navigation; `address` overrides Tailscale detection; `port` mirrors the
+# loopback GUI's port when it is 0.
+#
+# A patch replaces the targeted row's whole `config`, never merges it, so an
+# override in the profile's own cordis.patch.yml restates every key it keeps:
+#
+#   - id: simple-remote
+#     name: dsh-simple-remote
+#     config:
+#       autoToken: false
+
+- insert:
+    - id: simple-remote
+      name: dsh-simple-remote
+      config:
+        enabled: true
+        # On: a phone on the tailnet opens the plain address and is signed in.
+        # Off: the printed `?token=…` URL is required, as on loopback.
+        autoToken: true
+        # Empty: detect the Tailscale address. Set one to pin a MagicDNS name
+        # or an address the interface scan does not see.
+        address: ''
+        # 0: mirror the loopback GUI's port.
+        port: 0
+        # Mirror the URL lines to the dsh process output.
+        log: true
