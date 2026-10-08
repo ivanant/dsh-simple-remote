@@ -1,7 +1,7 @@
 {
   "name": "dsh-simple-remote",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "description": "Expose the DeepSeek Harness Web GUI to your Tailscale tailnet, and to nothing else.",
   "license": "MIT",
