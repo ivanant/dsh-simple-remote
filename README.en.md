@@ -13,7 +13,7 @@ or on a virtual adapter cannot even see the port.
 ## What it does
 
 ```
-phone (Tailscale) ──►  100.x.y.z:3080  ┐
+phone (Tailscale) ──►  100.x.y.z:3080   ┐
                                         │ dsh-simple-remote reverse proxy (rewrites Host/Origin to loopback)
 local browser     ──►  127.0.0.1:3080  ─┴─►  dsh's own Web server (still bound to loopback only)
 ```
@@ -32,7 +32,7 @@ local browser     ──►  127.0.0.1:3080  ─┴─►  dsh's own Web server 
 npm (default)
 
 ```
-dsh plugin --profile web add @ivanant/dsh-simple-remote@latest
+dsh plugin --profile web add dsh-simple-remote@latest
 ```
 
 From GitHub
