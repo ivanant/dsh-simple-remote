@@ -12,8 +12,8 @@
 ## 它做什么
 
 ```
-手机 (Tailscale)  ──►  100.x.y.z:3080  ┐
-                                        │ dsh-simple-remote 反向代理（改写 Host/Origin 为回环）
+手机 (Tailscale)  ──► 100.x.y.z:3080   ┐
+                                       │ dsh-simple-remote 反向代理（改写 Host/Origin 为回环）
 本机浏览器        ──►  127.0.0.1:3080  ─┴─►  dsh 自带的 Web 服务（保持只监听回环）
 ```
 
@@ -28,7 +28,7 @@
 npm（默认）
 
 ```
-dsh plugin --profile web add @ivanant/dsh-simple-remote@latest
+dsh plugin --profile web add dsh-simple-remote@latest
 ```
 
 Github方式
