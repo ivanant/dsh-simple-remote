@@ -2,8 +2,8 @@
 # loopback Web GUI, plus the settings row that shows its address.
 #
 # `enabled` turns the whole bridge off; `autoToken` completes the login for a
-# phone navigation; `address` overrides Tailscale detection; `port` mirrors the
-# loopback GUI's port when it is 0.
+# phone navigation; `address` overrides Tailscale detection; `port` is the
+# fixed phone-side port (0 mirrors the loopback GUI instead).
 #
 # A patch replaces the targeted row's whole `config`, never merges it, so an
 # override in the profile's own cordis.patch.yml restates every key it keeps:
@@ -24,7 +24,10 @@
         # Empty: detect the Tailscale address. Set one to pin a MagicDNS name
         # or an address the interface scan does not see.
         address: ''
-        # 0: mirror the loopback GUI's port.
-        port: 0
+        # The phone-side port. Fixed, because a Desktop Host binds a random
+        # loopback port that changes on every launch; 0 mirrors that port.
+        # When it is taken the plugin only reports the conflict (log + the
+        # settings row) and never retries or picks another port.
+        port: 3080
         # Mirror the URL lines to the dsh process output.
         log: true

@@ -21,6 +21,15 @@
  *   tailnet can open the plain `http://<tailnet-address>:<port>/` address.
  *   With `autoToken: false` the printed `?token=…` URL is required, and the
  *   tailnet behaves exactly like the loopback address does.
+ * - The launch token has two sources, newest first: the
+ *   `webserver/entry-url` table a current Host publishes after the Loader tree
+ *   settles, then the older `connection.authenticatedUrl()` accessor. The
+ *   newer table is authoritative when both exist.
+ * - The tailnet port is fixed at 3080 by default instead of mirroring the
+ *   loopback GUI, because a Desktop Host binds an OS-assigned loopback port
+ *   that changes on every launch. When that port is already taken the plugin
+ *   neither retries nor steals it: it logs one line, and the settings row
+ *   reports the busy port so the phone side has a visible explanation.
  *
  * @module dsh-simple-remote
  */
@@ -38,6 +47,11 @@ export const inject = ['webServer']
 
 /** The loopback literal the shipped Web composition binds. */
 const LOOPBACK = '127.0.0.1'
+/**
+ * The fixed tailnet port. A Desktop Host binds an OS-assigned loopback port, so
+ * mirroring it would hand the phone a new address on every launch.
+ */
+const DEFAULT_TAILNET_PORT = 3080
 /** Tailscale's CGNAT range, 100.64.0.0/10: the addresses the tailnet hands out. */
 const TAILNET_V4 = /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./
 /** Interface-name hint for tailnets whose addresses are not in the CGNAT range. */
@@ -58,8 +72,11 @@ function readOptions(config) {
 		enabled: source.enabled !== false,
 		/** Explicit tailnet address; empty means detect from the interfaces. */
 		address: typeof source.address === 'string' ? source.address.trim() : '',
-		/** Tailnet port; 0 (the default) mirrors the loopback GUI's port. */
-		port: Number.isInteger(source.port) && source.port >= 0 && source.port <= 65535 ? source.port : 0,
+		/**
+		 * Tailnet port; fixed at {@link DEFAULT_TAILNET_PORT} by default, and an
+		 * explicit 0 mirrors the loopback GUI's port instead.
+		 */
+		port: Number.isInteger(source.port) && source.port >= 0 && source.port <= 65535 ? source.port : DEFAULT_TAILNET_PORT,
 		/** Complete the launch-token exchange for a cookieless browser navigation. */
 		autoToken: source.autoToken !== false,
 		/** Mirror the plugin's URL lines to stdout. */
@@ -108,6 +125,29 @@ function isNavigation(request) {
 	if (typeof mode === 'string') return mode === 'navigate'
 	const accept = request.headers.accept
 	return typeof accept === 'string' && accept.includes('text/html')
+}
+
+/**
+ * The launch token carried by an announced entry URL, if any.
+ *
+ * A current Host publishes its complete entry URLs through
+ * `webserver/entry-url`: the token provider appends the `?token=…` URL of the
+ * browser handoff, and listeners append in registration order, so the table is
+ * read after every contributor has pushed its row.
+ * @param entries - the `{ label, url, open }` rows the event collected.
+ * @returns the first token query parameter found, or `undefined`.
+ */
+function tokenFromEntries(entries) {
+	for (const entry of Array.isArray(entries) ? entries : []) {
+		if (typeof entry?.url !== 'string') continue
+		try {
+			const token = new URL(entry.url).searchParams.get('token')
+			if (token !== null && token !== '') return token
+		} catch {
+			/* A row that is not a URL cannot carry a token. */
+		}
+	}
+	return undefined
 }
 
 /** The process launch token, read from the live Connection service. */
@@ -219,6 +259,8 @@ function clientState(state) {
 		autoToken: state.autoToken,
 		urls: [...state.urls],
 		loginUrl: base === undefined ? undefined : withToken(base, state.token),
+		/** The listener that could not bind, so the phone side explains why it is dark. */
+		error: state.error,
 	}
 }
 
@@ -228,6 +270,27 @@ function announceBase(ctx, state) {
 	state.announcedBase = true
 	const line = `dsh web: tailnet ${state.urls[0]}${state.autoToken ? ' (Tailscale; auto-login)' : ''}`
 	ctx.logger.info(line)
+	if (state.log) console.log(line)
+}
+
+/**
+ * Report a listener that never bound. The plugin leaves the port alone: it does
+ * not retry, pick another one, or wait for it to free up, because stealing or
+ * churning a port would hide the conflict instead of naming it.
+ * @param ctx - the plugin context, for the logger.
+ * @param state - the plugin state, where the failure is recorded for the page.
+ * @param address - the tailnet address the listener wanted.
+ * @param port - the port it wanted on that address.
+ * @param error - the bind failure Node reported.
+ */
+function announceFailure(ctx, state, address, port, error) {
+	const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN'
+	const busy = code === 'EADDRINUSE'
+	state.error = { code, address, port }
+	const line = busy
+		? `dsh web: tailnet port ${port} on ${address} is already in use, so the phone cannot connect; another DSH instance or listener owns it — stop that listener or give this plugin a different "port"`
+		: `dsh web: tailnet listener on ${address}:${port} failed (${code}), so the phone cannot connect`
+	ctx.logger.warn(line)
 	if (state.log) console.log(line)
 }
 
@@ -268,32 +331,68 @@ export function apply(ctx, config) {
 		log: options.log,
 		token: undefined,
 		urls: [],
+		error: undefined,
 		announcedBase: false,
 		announcedToken: false,
+		warnedNoToken: false,
 	}
 	const servers = []
 	// Upgraded sockets outlive their request, so disposal has to end them too.
 	const upgradedSockets = new Set()
 
+	/**
+	 * Resolve the launch token the newest way this Host offers.
+	 *
+	 * The current Host publishes its tokenized entry URL through
+	 * `webserver/entry-url` after the Loader tree settles; older Hosts only
+	 * expose `connection.authenticatedUrl()`. The published table wins, and the
+	 * accessor is the fallback.
+	 * @returns the token, or `undefined` when this Host exposes neither.
+	 */
+	const resolveToken = () => {
+		if (state.token !== undefined) return state.token
+		state.token = launchToken(ctx, upstreamPort)
+		if (state.token !== undefined) announceToken(ctx, state)
+		else if (!state.warnedNoToken) {
+			state.warnedNoToken = true
+			ctx.logger.warn('simple-remote: auto-login is inactive because this Host published no launch token; open the tokenized URL from the dsh output instead')
+		}
+		return state.token
+	}
+
+	ctx.on('webserver/entry-url', (baseUrl, entries) => {
+		// Contributors append synchronously, so one turn later the table is complete
+		// and the token provider's row is present even when it registered after us.
+		queueMicrotask(() => {
+			const token = tokenFromEntries(entries)
+			if (token === undefined) return
+			state.token = token
+			announceToken(ctx, state)
+		})
+	})
+
 	for (const address of addresses) {
 		const server = createServer((request, response) => {
 			// The first navigation of a device that holds no session cookie gets
 			// the launch token, which mints the cookie for this authority.
-			if (options.autoToken && isNavigation(request) && state.token !== undefined) {
-				let direct
-				try {
-					direct = new URL(request.url ?? '/', 'http://dsh.invalid')
-				} catch {
-					direct = undefined
-				}
-				if (direct !== undefined && direct.pathname === '/' && !direct.searchParams.has('token') && !hasSessionCookie(request, upstreamPort)) {
-					response.writeHead(302, {
-						location: `/?token=${encodeURIComponent(state.token)}`,
-						'cache-control': 'no-store',
-						'referrer-policy': 'no-referrer',
-					})
-					response.end()
-					return
+			if (options.autoToken && isNavigation(request)) {
+				const token = resolveToken()
+				if (token !== undefined) {
+					let direct
+					try {
+						direct = new URL(request.url ?? '/', 'http://dsh.invalid')
+					} catch {
+						direct = undefined
+					}
+					if (direct !== undefined && direct.pathname === '/' && !direct.searchParams.has('token') && !hasSessionCookie(request, upstreamPort)) {
+						response.writeHead(302, {
+							location: `/?token=${encodeURIComponent(token)}`,
+							'cache-control': 'no-store',
+							'referrer-policy': 'no-referrer',
+						})
+						response.end()
+						return
+					}
 				}
 			}
 			forwardRequest(ctx, state, request, response)
@@ -304,7 +403,9 @@ export function apply(ctx, config) {
 			forwardUpgrade(ctx, state, request, socket, head)
 		})
 		server.on('error', (error) => {
-			ctx.logger.warn(`simple-remote: tailnet listener on ${address} failed (${error.code ?? error.message})`)
+			// A busy port is reported, never worked around: the phone keeps its
+			// configured address, and the settings row names the conflict.
+			announceFailure(ctx, state, address, options.port > 0 ? options.port : upstreamPort, error)
 		})
 		server.listen(options.port > 0 ? options.port : upstreamPort, address, () => {
 			const assigned = server.address()
@@ -330,12 +431,13 @@ export function apply(ctx, config) {
 	})
 
 	// The launch token lives in the Connection service, which may activate
-	// before or after this row; resolve it whenever it appears.
+	// before or after this row; read the legacy accessor whenever it appears.
+	// A Host without it stays silent here and relies on the entry-url table.
 	ctx.inject(['connection'], (connectionCtx) => {
-		state.token = launchToken(connectionCtx, upstreamPort)
+		if (state.token !== undefined) return
+		const token = launchToken(connectionCtx, upstreamPort)
+		if (token === undefined) return
+		state.token = token
 		announceToken(connectionCtx, state)
-		if (state.token === undefined) {
-			ctx.logger.warn('simple-remote: Connection exposed no launch token; auto-login stays inactive')
-		}
 	})
 }

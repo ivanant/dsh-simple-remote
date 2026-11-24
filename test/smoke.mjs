@@ -165,9 +165,37 @@ async function checkClient() {
 	assert.ok(tokenRow !== null, 'token mode row renders')
 	ok('component renders in auto, token and disabled states')
 
+	// A listener that never bound reports the busy port instead of nothing.
+	globalThis.__DSH_SIMPLE_REMOTE__ = {
+		enabled: true,
+		autoToken: true,
+		urls: [],
+		loginUrl: undefined,
+		error: { code: 'EADDRINUSE', address: '100.64.1.2', port: 3080 },
+	}
+	const busyRow = registration.Component({ t: (key) => dictionary.dict.zh[key] ?? key })
+	assert.ok(busyRow !== null, 'a busy port renders a notice')
+	const busyDesc = busyRow.children[0].find((child) => child?.props?.className === 'dsr-desc')
+	assert.ok(String(busyDesc.children[0]).includes('3080'), 'the notice names the busy port')
+	globalThis.__DSH_SIMPLE_REMOTE__ = {
+		enabled: true,
+		autoToken: true,
+		urls: [],
+		loginUrl: undefined,
+		error: { code: 'EACCES', address: '100.64.1.2', port: 3080 },
+	}
+	assert.ok(registration.Component({ t: (key) => key }) !== null, 'a non-busy bind failure renders too')
+	ok('a failed listener renders a notice that names the address and port')
+
 	// The copy path: the clipboard stub must receive the address the row shows.
 	let copied
 	navigatorStub.clipboard = { writeText: (value) => { copied = value; return Promise.resolve() } }
+	globalThis.__DSH_SIMPLE_REMOTE__ = {
+		enabled: true,
+		autoToken: false,
+		urls: ['http://100.64.1.2:3080/'],
+		loginUrl: 'http://100.64.1.2:3080/?token=abc',
+	}
 	const row = registration.Component({ t: (key) => key })
 	const line = row.children[0].find((child) => child?.props?.className === 'dsr-line')
 	const button = line.children[0].find((child) => child?.props?.className === 'dsr-button')
@@ -299,7 +327,108 @@ async function checkHost() {
 	assert.deepEqual(warnings, [])
 }
 
+/**
+ * A current Host publishes its tokenized entry URL through
+ * `webserver/entry-url` and exposes no `connection.authenticatedUrl`, so the
+ * table has to supply the launch token on its own.
+ */
+async function checkEntryUrlToken() {
+	const plugin = await import(pathToFileURL(join(ROOT, 'index.js')).href)
+	const address = tailnetAddress()
+	const upstreamPort = await freePort()
+	const listenPort = await freePort()
+	const token = 'ENTRYURLTOKEN'
+	const upstream = createServer((request, response) => {
+		response.writeHead(200, { 'content-type': 'text/plain' })
+		response.end(`${request.method} ${request.url}`)
+	})
+	await new Promise((resolve) => upstream.listen(upstreamPort, '127.0.0.1', resolve))
+
+	const disposers = []
+	const warnings = []
+	let entryUrl
+	const ctx = {
+		webServer: { port: upstreamPort },
+		logger: { info: () => {}, warn: (message) => warnings.push(String(message)) },
+		// A current Host has no legacy `authenticatedUrl` accessor.
+		get: () => undefined,
+		inject: (deps, callback) => { callback(ctx) },
+		on: (name, callback) => {
+			if (name === 'webserver/entry-url') entryUrl = callback
+		},
+		effect: (fn) => { disposers.push(fn()) },
+	}
+	assert.equal(typeof entryUrl, 'undefined')
+	plugin.apply(ctx, { enabled: true, autoToken: true, address, port: listenPort, log: false })
+	assert.equal(typeof entryUrl, 'function', 'the plugin subscribes to webserver/entry-url')
+	await new Promise((resolve) => setTimeout(resolve, 200))
+
+	// Another contributor appends the tokenized row after this plugin's listener
+	// ran; the plugin reads the table one turn later, so the order does not matter.
+	const entries = []
+	entryUrl(`http://${address}:${listenPort}/`, entries)
+	entries.push({ label: 'dsh web', url: `http://127.0.0.1:${upstreamPort}/?token=${token}`, open: true })
+	await new Promise((resolve) => setImmediate(resolve))
+
+	const host = `${address}:${listenPort}`
+	const first = await call(listenPort, {
+		path: '/',
+		headers: { host, 'sec-fetch-mode': 'navigate', accept: 'text/html' },
+		address,
+	})
+	assert.equal(first.status, 302, 'the entry-url token feeds the auto-login redirect')
+	assert.equal(first.headers.location, `/?token=${token}`)
+	ok('the entry-url table supplies the launch token on a Host without authenticatedUrl')
+
+	for (const dispose of disposers) await dispose()
+	await new Promise((resolve) => setTimeout(resolve, 150))
+	await new Promise((resolve) => upstream.close(resolve))
+	assert.deepEqual(warnings, [])
+}
+
+/** A busy phone-side port is reported, not worked around. */
+async function checkBusyPort() {
+	const plugin = await import(pathToFileURL(join(ROOT, 'index.js')).href)
+	const address = tailnetAddress()
+	const upstreamPort = await freePort()
+	// Another DSH instance holding the same tailnet address and port.
+	const squatter = createServer((request, response) => response.end('squatter'))
+	await new Promise((resolve) => squatter.listen(0, address, resolve))
+	const busyPort = squatter.address().port
+
+	const warnings = []
+	let injectTable
+	const disposers = []
+	const ctx = {
+		webServer: { port: upstreamPort },
+		logger: { info: () => {}, warn: (message) => warnings.push(String(message)) },
+		get: () => undefined,
+		inject: (deps, callback) => { callback(ctx) },
+		on: (name, callback) => {
+			if (name === 'webserver/index-inject') injectTable = callback
+		},
+		effect: (fn) => { disposers.push(fn()) },
+	}
+	plugin.apply(ctx, { enabled: true, autoToken: true, address, port: busyPort, log: false })
+	await new Promise((resolve) => setTimeout(resolve, 250))
+
+	assert.ok(warnings.some((line) => line.includes('already in use')), 'the busy port is reported in the log')
+	const table = []
+	injectTable(table)
+	const state = table[0]?.value
+	assert.deepEqual(state.urls, [], 'no tailnet URL is advertised')
+	assert.equal(state.error?.code, 'EADDRINUSE', 'the page state carries the bind failure')
+	assert.equal(state.error?.port, busyPort, 'the failure names the port')
+	ok('a busy phone-side port is reported in the log and in the page state')
+
+	for (const dispose of disposers) await dispose()
+	await new Promise((resolve) => setTimeout(resolve, 150))
+	await new Promise((resolve) => squatter.close(resolve))
+}
+
 console.log(`dsh-simple-remote smoke test (tailnet address: ${tailnetAddress()})`)
 await checkClient()
 await checkHost()
+await checkEntryUrlToken()
+await checkBusyPort()
 console.log(`\n${passed.length} checks passed`)

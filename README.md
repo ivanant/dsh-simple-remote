@@ -49,6 +49,19 @@ dsh plugin --profile web add github:ivanant/dsh-simple-remote
 装完后**手机端**：连上 Tailscale，直接打开 `http://<你的 tailnet 地址>:3080/` 即可。
 首次访问时插件自动完成登录（见下），浏览器随后记住 30 天。
 
+### 桌面版（Desktop）
+
+桌面版内部跑的就是同一套 Web 应用（`--no-open --host 127.0.0.1 --port 0`），
+回环端口每次启动都随机；插件默认把**手机侧端口固定在 3080**，所以手机地址不会变。
+
+安装到 desktop profile：
+
+```
+dsh plugin --profile desktop add dsh-simple-remote
+```
+
+或在桌面应用的「插件」页里安装。装好后不用改配置，手机打开 `http://<tailnet 地址>:3080/` 即可。
+
 ## 配置
 
 安装后直接使用就行。特殊情况可以配置：
@@ -63,9 +76,13 @@ dsh plugin --profile web add github:ivanant/dsh-simple-remote
     enabled: true # false = 完全关闭，不监听任何 tailnet 端口
     autoToken: true # 见「安全」一节
     address: "" # 留空 = 自动探测 Tailscale 地址（100.64.0.0/10）；也可写死地址或 MagicDNS 名
-    port: 0 # 0 = 与回环 GUI 同端口（默认 3080）
+    port: 3080 # 手机侧固定端口；写 0 = 改成跟随回环 GUI 的端口
     log: true # 是否把地址行同时打印到 dsh 进程输出
 ```
+
+端口**只用 Tailscale 地址**，所以手机侧 3080 和回环的 3080 不冲突。
+一个 tailnet 端口同一时间只能被一个实例占用：如果想同时暴露 web profile 和桌面版，
+给其中一个改成别的号（例如 3081）。
 
 ## 安全
 
@@ -83,13 +100,20 @@ dsh plugin --profile web add github:ivanant/dsh-simple-remote
 此时手机必须打开带 `?token=…` 的完整链接（启动日志 / 设置页可复制），行为与回环地址完全一致；
 不知道令牌的 tailnet 设备只会收到 401。
 
+令牌来源按新版优先：当前版本通过 `webserver/entry-url` 事件发布带令牌的入口地址，插件从这张表里取；
+旧版本没有这个事件时，回退到 `connection.authenticatedUrl()`。两者都没有时自动登录保持关闭（日志会提示一次）。
+
+**桌面版**下回环端口每次启动都会变，所以会话 cookie 会随之失效：
+保持 `autoToken: true` 时手机会自动重新登录；若关掉 `autoToken`，每次重启桌面应用都要重新复制一次带令牌的链接。
+
 无论哪种模式，端口都只绑在 Tailscale 地址上，`0.0.0.0` 从未被使用，
 所以局域网 / 公共网络里的设备无法访问（这也是 dsh 官方拒绝 `--host 0.0.0.0` 的那条红线）。
 
 ## 验证
 
-`node test/smoke.mjs` 会在 Harness 之外跑一遍插件本体（共 13 项）：浏览器半段的工厂与渲染（自动登录 / 令牌 / 关闭三种状态 + 复制按钮）、
-代理的令牌跳转、cookie 透传、`/api` 的 Host/Origin 改写、跨站 Origin 保持原样、WebSocket 升级、页面状态注入、以及卸载时关闭监听。
+`node test/smoke.mjs` 会在 Harness 之外跑一遍插件本体（共 16 项）：浏览器半段的工厂与渲染（自动登录 / 令牌 / 关闭三种状态、
+端口被占用时的提示、复制按钮）、代理的令牌跳转、cookie 透传、`/api` 的 Host/Origin 改写、跨站 Origin 保持原样、
+WebSocket 升级、页面状态注入、`webserver/entry-url` 令牌来源、端口占用上报，以及卸载时关闭监听。
 
 装到活的 Harness 之后也实测过（本机经 Tailscale 地址访问）：
 
@@ -114,9 +138,10 @@ dsh plugin --profile web add github:ivanant/dsh-simple-remote
 | 手机连不上、本机也访问不了该地址         | 看 dsh 日志里有没有 `simple-remote: ... listener failed`；确认 Tailscale 已连接且本机有 `100.x.y.z` 地址                                                                                                                                                                                                                                                                       |
 | 日志里出现「no Tailscale address found」 | Tailscale 未运行，或地址不在 `100.64.0.0/10`；用 `address` 配置写死地址                                                                                                                                                                                                                                                                                                        |
 | 本机可访问、手机超时                     | Windows 防火墙拦了入站。管理员 PowerShell 里执行（把 `<node.exe 路径>` 换成 `where.exe node` 的结果）：`New-NetFirewallRule -DisplayName "DSH Tailscale Remote" -Direction Inbound -Program "<node.exe 路径>" -Action Allow -Profile Any`；或只放行端口：`New-NetFirewallRule -DisplayName "DSH Web Tailscale" -Direction Inbound -Protocol TCP -LocalPort 3080 -Action Allow` |
-| 手机打开是 401                           | `autoToken` 被关掉了；用带 `?token=` 的链接打开一次                                                                                                                                                                                                                                                                                                                            |
+| 手机打开是 401                           | `autoToken` 被关掉了；用带 `?token=` 的链接打开一次。若设了 `autoToken: true` 仍是 401，看日志里有没有「auto-login is inactive」：这个 Host 没有发布令牌                                                                                                                                                                                                                      |
 | 手机页面能开但接口 403                   | 你在用别的域名/地址访问（例如反向代理改名）；请加 `--trusted-host` 或改用插件打印的地址                                                                                                                                                                                                                                                                                        |
-| 想换端口                                 | 改 `port`，或用 `dsh --profile web --port 8080`（回环换端口后插件默认跟随）                                                                                                                                                                                                                                                                                                    |
+| 日志出现「port 3080 ... already in use」 | 手机侧 3080 已被别的进程占用（常见：另一个 DSH 实例也装了这个插件）。插件不会抢占或改端口，只报告冲突；关掉占用者，或把 `port` 改成别的号（例如 3081）。设置 → 通用 里也会显示这条提示                                                                                                                                                                                         |
+| 想换端口                                 | 改 `port`。注意默认是固定 3080，不再跟随回环端口；写 `port: 0` 才恢复跟随                                                                                                                                                                                                                                                                                                      |
 
 ## 改代码后如何生效
 
@@ -130,3 +155,4 @@ dsh plugin --profile web add github:ivanant/dsh-simple-remote
 - 手机上是普通 HTTP，不是安全上下文（Tailscale 的 HTTPS 证书需要另一套机制，例如 `tailscale serve`）；
   测过的功能不受影响，但浏览器 API 里要求安全上下文的能力（如 Service Worker）不可用。
 - 只在启动时探测一次地址；Tailscale 换地址后需要重启 dsh（或重载该插件行）。
+- 手机侧端口固定后，同一时间只有一个实例能对外（见「配置」）；被占用时插件只报告，不会换端口。

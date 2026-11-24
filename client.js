@@ -21,6 +21,8 @@ window.__ModuleLoader__.load({
 			copy: '复制',
 			copied: '已复制',
 			copyToken: '复制带令牌的链接',
+			busy: '端口 {port} 已被占用，手机暂时连不上。请关掉占用它的程序（例如另一个 DSH 实例），或改插件的 port 配置。',
+			failed: '无法在 {address}:{port} 上监听（{code}），手机暂时连不上。',
 		}
 		const en = {
 			title: 'Mobile access (Tailscale)',
@@ -29,6 +31,8 @@ window.__ModuleLoader__.load({
 			copy: 'Copy',
 			copied: 'Copied',
 			copyToken: 'Copy tokenized link',
+			busy: 'Port {port} is already in use, so the phone cannot connect. Stop the process holding it (for example another DSH instance) or change the plugin\'s port.',
+			failed: 'Could not listen on {address}:{port} ({code}), so the phone cannot connect.',
 		}
 
 		const CSS_ID = 'dsh-simple-remote/RemoteAccessRow.css'
@@ -74,6 +78,11 @@ window.__ModuleLoader__.load({
 			})
 		}
 
+		/** Replace `{name}` placeholders in a dictionary string. */
+		function fill(template, values) {
+			return String(template).replace(/\{(\w+)\}/g, (match, key) => (values[key] === undefined ? match : String(values[key])))
+		}
+
 		/** One General-settings row: the tailnet address and its copy control. */
 		function RemoteAccessRow(props) {
 			const t = typeof props.t === 'function' ? props.t : (key) => en[key] ?? key
@@ -85,7 +94,17 @@ window.__ModuleLoader__.load({
 			}, [])
 			if (state === null || state === undefined || state.enabled !== true) return null
 			const urls = Array.isArray(state.urls) ? state.urls : []
-			if (urls.length === 0) return null
+			if (urls.length === 0) {
+				// The listener never bound: name the conflict instead of showing
+				// nothing, so the phone-side silence has a visible cause.
+				const error = state.error
+				if (error === null || typeof error !== 'object') return null
+				const text = fill(error.code === 'EADDRINUSE' ? t('busy') : t('failed'), error)
+				return h('div', { className: 'dsr-row' }, [
+					h('div', { className: 'dsr-title', key: 'title' }, t('title')),
+					h('div', { className: 'dsr-desc', key: 'desc' }, text),
+				])
+			}
 			const auto = state.autoToken === true
 			const primary = urls[0]
 			const tokenUrl = typeof state.loginUrl === 'string' ? state.loginUrl : primary
