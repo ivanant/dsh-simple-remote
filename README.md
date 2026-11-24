@@ -5,7 +5,7 @@
 只用一个插件就可以手机也访问到DSH。安装即用，不用配置。
 
 只使用Tailscale，安装了这个软件的设备就组网了，可以互相访问。
-把 DeepSeek Harness 的网页界面（`dsh --profile web` 的 GUI）**只**开放给本机的 Tailscale tailnet：
+把 DeepSeek Harness 的网页界面（WEB版本或者桌面端内置的）**只**开放给本机的 Tailscale tailnet：
 在 Tailscale 网卡地址上另开一个监听端口，反向代理到本机回环上的 GUI。
 于是「连上 Tailscale 的手机」直接打开网页就能用，而局域网、WSL、虚拟网卡上的其他设备连端口都看不到。
 

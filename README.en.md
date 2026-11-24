@@ -5,7 +5,7 @@
 A single plugin is all it takes to reach DSH from your phone. Install and it just works — no configuration needed.
 
 Tailscale alone does the networking: any device with it installed joins the tailnet and can reach the others.
-Open the DeepSeek Harness Web GUI (the GUI of `dsh --profile web`) **only** to this machine's Tailscale tailnet:
+Open the DeepSeek Harness Web GUI (the web version, or the one built into the Desktop app) **only** to this machine's Tailscale tailnet:
 start a second listening port on the Tailscale interface address and reverse proxy it to the GUI on loopback.
 A phone that is on the tailnet then simply opens the page and it works, while other devices on the LAN, in WSL,
 or on a virtual adapter cannot even see the port.
