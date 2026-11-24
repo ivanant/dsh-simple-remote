@@ -203,6 +203,29 @@ async function checkClient() {
 	await new Promise((resolve) => setImmediate(resolve))
 	assert.equal(copied, 'http://100.64.1.2:3080/?token=abc', 'copy button copies the tokenized URL')
 	ok('copy button hands the tokenized URL to the clipboard')
+
+	// A verified MagicDNS name leads, with the numeric address as fallback.
+	globalThis.__DSH_SIMPLE_REMOTE__ = {
+		enabled: true,
+		autoToken: true,
+		urls: ['http://100.64.1.2:3080/'],
+		loginUrl: 'http://100.64.1.2:3080/?token=abc',
+		magicDns: {
+			name: 'dev.tailnet-example.ts.net',
+			url: 'http://dev.tailnet-example.ts.net:3080/',
+			loginUrl: 'http://dev.tailnet-example.ts.net:3080/?token=abc',
+		},
+	}
+	const namedRows = registration.Component({ t: (key) => key }).children[0]
+	const namedLine = namedRows.find((child) => child?.props?.className === 'dsr-line')
+	assert.equal(namedLine.children[0][0].children[0], 'http://dev.tailnet-example.ts.net:3080/', 'the MagicDNS name is shown first')
+	const fallbackLine = namedRows.find((child) => child?.props?.className === 'dsr-line dsr-fallback')
+	assert.equal(fallbackLine.children[0][1].children[0], 'http://100.64.1.2:3080/', 'the address stays as a fallback')
+	copied = undefined
+	fallbackLine.children[0][2].props.onClick()
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(copied, 'http://100.64.1.2:3080/', 'the fallback copies its address')
+	ok('a verified MagicDNS name is shown first, with the address as a copyable fallback')
 }
 
 /** The host half, driven against a stub upstream. */
@@ -314,6 +337,10 @@ async function checkHost() {
 	assert.equal(table[0]?.name, '__DSH_SIMPLE_REMOTE__')
 	assert.deepEqual(state.urls, [`http://${address}:${listenPort}/`])
 	assert.equal(state.loginUrl, `http://${address}:${listenPort}/?token=${token}`)
+	if (state.magicDns !== undefined) {
+		assert.match(state.magicDns.name, /\./, 'an advertised MagicDNS name is fully qualified')
+		assert.equal(state.magicDns.url, `http://${state.magicDns.name}:${listenPort}/`, 'the name URL carries the phone-side port')
+	}
 	ok('the page state carries the tailnet URL and its tokenized login URL')
 
 	for (const dispose of disposers) await dispose()

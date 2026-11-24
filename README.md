@@ -42,12 +42,14 @@ dsh plugin --profile web add github:ivanant/dsh-simple-remote
 安装后：
 
 - 新增 Loader 行 `simple-remote`（包名 `dsh-simple-remote`）。
-- 启动日志里会出现一行：
+- 启动日志里会出现两行：
   `dsh web: tailnet http://100.111.128.100:3080 (Tailscale; auto-login)`
-- 设置 → 通用 里多出一行「手机访问（Tailscale）」，显示地址并可一键复制。
+  `dsh web: tailnet name http://dev.tail3b32bf.ts.net:3080/ (MagicDNS)`
+  第二行是完整 MagicDNS 名，只有在它确实解析回这台机器时才会出现。
+- 设置 → 通用 里多出一行「手机访问（Tailscale）」，优先显示 MagicDNS 全名，下面附数字地址作为备用，都能一键复制。
 
-装完后**手机端**：连上 Tailscale，直接打开 `http://<你的 tailnet 地址>:3080/` 即可。
-首次访问时插件自动完成登录（见下），浏览器随后记住 30 天。
+装完后**手机端**：连上 Tailscale，直接打开 `http://<机器名>.<tailnet>.ts.net:3080/` 即可
+（例如 `http://dev.tail3b32bf.ts.net:3080/`）。首次访问时插件自动完成登录（见下），浏览器随后记住 30 天。
 
 ### 桌面版（Desktop）
 
@@ -111,9 +113,9 @@ dsh plugin --profile desktop add dsh-simple-remote
 
 ## 验证
 
-`node test/smoke.mjs` 会在 Harness 之外跑一遍插件本体（共 16 项）：浏览器半段的工厂与渲染（自动登录 / 令牌 / 关闭三种状态、
-端口被占用时的提示、复制按钮）、代理的令牌跳转、cookie 透传、`/api` 的 Host/Origin 改写、跨站 Origin 保持原样、
-WebSocket 升级、页面状态注入、`webserver/entry-url` 令牌来源、端口占用上报，以及卸载时关闭监听。
+`node test/smoke.mjs` 会在 Harness 之外跑一遍插件本体（共 17 项）：浏览器半段的工厂与渲染（自动登录 / 令牌 / 关闭三种状态、
+MagicDNS 名在前、数字地址作为备用、端口被占用时的提示、复制按钮）、代理的令牌跳转、cookie 透传、`/api` 的 Host/Origin 改写、
+跨站 Origin 保持原样、WebSocket 升级、页面状态注入、`webserver/entry-url` 令牌来源、端口占用上报，以及卸载时关闭监听。
 
 装到活的 Harness 之后也实测过（本机经 Tailscale 地址访问）：
 
@@ -139,6 +141,7 @@ WebSocket 升级、页面状态注入、`webserver/entry-url` 令牌来源、端
 | 日志里出现「no Tailscale address found」 | Tailscale 未运行，或地址不在 `100.64.0.0/10`；用 `address` 配置写死地址                                                                                                                                                                                                                                                                                                        |
 | 本机可访问、手机超时                     | Windows 防火墙拦了入站。管理员 PowerShell 里执行（把 `<node.exe 路径>` 换成 `where.exe node` 的结果）：`New-NetFirewallRule -DisplayName "DSH Tailscale Remote" -Direction Inbound -Program "<node.exe 路径>" -Action Allow -Profile Any`；或只放行端口：`New-NetFirewallRule -DisplayName "DSH Web Tailscale" -Direction Inbound -Protocol TCP -LocalPort 3080 -Action Allow` |
 | 手机打开是 401                           | `autoToken` 被关掉了；用带 `?token=` 的链接打开一次。若设了 `autoToken: true` 仍是 401，看日志里有没有「auto-login is inactive」：这个 Host 没有发布令牌                                                                                                                                                                                                                      |
+| 手机用短名（如 `workspace`、`dev`）打不开 | 短名要靠系统搜索域去补 `.<tailnet>.ts.net`，手机系统（尤其 Android）通常不带这个搜索域，所以短名解析不到目标地址。用插件打印的**完整** MagicDNS 名（`你的机器名.<tailnet>.ts.net:3080`）；短名如果解析到了别的机器，说明 tailnet 里另一台设备（或没清掉的旧节点）占着这个名字，去管理后台确认、改名或删除                                                                                     |
 | 手机页面能开但接口 403                   | 你在用别的域名/地址访问（例如反向代理改名）；请加 `--trusted-host` 或改用插件打印的地址                                                                                                                                                                                                                                                                                        |
 | 日志出现「port 3080 ... already in use」 | 手机侧 3080 已被别的进程占用（常见：另一个 DSH 实例也装了这个插件）。插件不会抢占或改端口，只报告冲突；关掉占用者，或把 `port` 改成别的号（例如 3081）。设置 → 通用 里也会显示这条提示                                                                                                                                                                                         |
 | 想换端口                                 | 改 `port`。注意默认是固定 3080，不再跟随回环端口；写 `port: 0` 才恢复跟随                                                                                                                                                                                                                                                                                                      |
@@ -155,4 +158,6 @@ WebSocket 升级、页面状态注入、`webserver/entry-url` 令牌来源、端
 - 手机上是普通 HTTP，不是安全上下文（Tailscale 的 HTTPS 证书需要另一套机制，例如 `tailscale serve`）；
   测过的功能不受影响，但浏览器 API 里要求安全上下文的能力（如 Service Worker）不可用。
 - 只在启动时探测一次地址；Tailscale 换地址后需要重启 dsh（或重载该插件行）。
+- MagicDNS 名是启动后异步查一次（直接问 `100.100.100.100`，超时 1.2 s）并做反向校验的；查不到就只显示数字地址，
+  不影响访问。名字必须在查到的那一刻解析回同一个地址，否则不显示。
 - 手机侧端口固定后，同一时间只有一个实例能对外（见「配置」）；被占用时插件只报告，不会换端口。

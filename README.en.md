@@ -46,12 +46,16 @@ Or install the package named `dsh-simple-remote` from the "Plugins" page of the 
 After installing:
 
 - A new Loader row `simple-remote` appears (package name `dsh-simple-remote`).
-- One line shows up in the startup log:
+- Two lines show up in the startup log:
   `dsh web: tailnet http://100.111.128.100:3080 (Tailscale; auto-login)`
-- Settings → General gains a "Phone access (Tailscale)" row that shows the address and copies it in one click.
+  `dsh web: tailnet name http://dev.tail3b32bf.ts.net:3080/ (MagicDNS)`
+  The second one is the full MagicDNS name, and only appears when it still resolves to this machine.
+- Settings → General gains a "Phone access (Tailscale)" row that leads with the MagicDNS name, keeps the numeric
+  address underneath as a fallback, and copies either in one click.
 
-On the **phone**: connect to Tailscale and open `http://<your tailnet address>:3080/` directly.
-The plugin completes the login on the first visit (see below), and the browser then remembers it for 30 days.
+On the **phone**: connect to Tailscale and open `http://<machine>.<tailnet>.ts.net:3080/` directly
+(for example `http://dev.tail3b32bf.ts.net:3080/`). The plugin completes the login on the first visit (see below),
+and the browser then remembers it for 30 days.
 
 ### Desktop
 
@@ -119,11 +123,11 @@ or a public network cannot reach it. That is also the red line behind dsh's offi
 
 ## Verification
 
-`node test/smoke.mjs` runs the plugin itself outside the Harness (16 checks): the browser half's factory and
-rendering (auto-login, token and disabled states, the busy-port notice, plus the copy button), the proxy's token
-redirect, cookie pass-through, `/api` Host/Origin rewriting, a cross-site Origin left untouched, the WebSocket
-upgrade, page-state injection, the `webserver/entry-url` token source, the busy-port report, and the listener
-closing on disposal.
+`node test/smoke.mjs` runs the plugin itself outside the Harness (17 checks): the browser half's factory and
+rendering (auto-login, token and disabled states, the MagicDNS name leading with the address as a copyable fallback,
+the busy-port notice), the proxy's token redirect, cookie pass-through, `/api` Host/Origin rewriting, a cross-site
+Origin left untouched, the WebSocket upgrade, page-state injection, the `webserver/entry-url` token source, the
+busy-port report, and the listener closing on disposal.
 
 It was also exercised against a live Harness (reached from this machine through the Tailscale address):
 
@@ -150,6 +154,7 @@ troubleshooting table below.
 | The log says "no Tailscale address found"                                  | Tailscale is not running, or the address is outside `100.64.0.0/10`; pin it with the `address` config                                                                                                                                                                                                                                                                                                                   |
 | This machine works, the phone times out                                    | Windows Firewall is blocking inbound. In an administrator PowerShell (replace `<node.exe path>` with the output of `where.exe node`): `New-NetFirewallRule -DisplayName "DSH Tailscale Remote" -Direction Inbound -Program "<node.exe path>" -Action Allow -Profile Any`; or allow just the port: `New-NetFirewallRule -DisplayName "DSH Web Tailscale" -Direction Inbound -Protocol TCP -LocalPort 3080 -Action Allow` |
 | The phone shows 401                                                        | `autoToken` is off; open the link with `?token=` once. If `autoToken: true` still returns 401, look for "auto-login is inactive" in the log: this Host published no token                                                                                                                                                                                |
+| The phone cannot open a short name such as `workspace` or `dev`            | A short name needs the OS to append the tailnet search domain, which phone resolvers (Android especially) usually do not. Use the **full** MagicDNS name the plugin prints (`<machine>.<tailnet>.ts.net:3080`). If a short name resolves to a different machine, another device (or a node that was never cleaned up) owns that name in the tailnet — check, rename or delete it in the admin console |
 | The page opens on the phone but API calls return 403                       | You are using a different host name or address (for example a renaming reverse proxy); add `--trusted-host` or use the address the plugin prints                                                                                                                                                                                                                                                                        |
 | The log says "port 3080 ... already in use"                                | Another process owns the phone-side port (typically another DSH instance that also has this plugin). The plugin never steals it or picks another port — it only reports the conflict. Stop that listener or set `port` to another number (for example 3081). Settings → General shows the same notice |
 | You want another port                                                      | Change `port`. The default is the fixed 3080, no longer the loopback port; `port: 0` restores mirroring                                                                                                                                                                                                                                                 |
@@ -169,5 +174,8 @@ troubleshooting table below.
   context (for example Service Workers) are unavailable.
 - The address is detected once at startup; after Tailscale changes it, dsh must be restarted (or the plugin row
   reloaded).
+- The MagicDNS name is looked up once, after the listener is up (directly from `100.100.100.100`, 1.2 s timeout) and
+  verified by resolving it back to the same address; when that fails only the numeric address is shown, and access
+  is unaffected.
 - With a fixed phone-side port only one instance can expose it at a time (see "Configuration"); a busy port is
   reported, never worked around.

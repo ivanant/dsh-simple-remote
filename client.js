@@ -21,6 +21,7 @@ window.__ModuleLoader__.load({
 			copy: '复制',
 			copied: '已复制',
 			copyToken: '复制带令牌的链接',
+			fallbackLabel: '名字解析不了时用：',
 			busy: '端口 {port} 已被占用，手机暂时连不上。请关掉占用它的程序（例如另一个 DSH 实例），或改插件的 port 配置。',
 			failed: '无法在 {address}:{port} 上监听（{code}），手机暂时连不上。',
 		}
@@ -31,6 +32,7 @@ window.__ModuleLoader__.load({
 			copy: 'Copy',
 			copied: 'Copied',
 			copyToken: 'Copy tokenized link',
+			fallbackLabel: 'If the name does not resolve:',
 			busy: 'Port {port} is already in use, so the phone cannot connect. Stop the process holding it (for example another DSH instance) or change the plugin\'s port.',
 			failed: 'Could not listen on {address}:{port} ({code}), so the phone cannot connect.',
 		}
@@ -45,6 +47,7 @@ window.__ModuleLoader__.load({
 			'.dsr-button{font-size:12px;line-height:18px;padding:4px 10px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font-family:inherit}',
 			'.dsr-button:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
 			'.dsr-secondary{margin-top:8px}',
+			'.dsr-fallback .dsr-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
 		].join('')
 		if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(CSS_ID) + ']') === null) {
 			const tag = document.createElement('style')
@@ -108,6 +111,16 @@ window.__ModuleLoader__.load({
 			const auto = state.autoToken === true
 			const primary = urls[0]
 			const tokenUrl = typeof state.loginUrl === 'string' ? state.loginUrl : primary
+			// A phone can only resolve the full MagicDNS name (the bare machine
+			// name needs the OS search domain, which Android does not carry), so
+			// the name is offered first and the address stays as the fallback.
+			const named = state.magicDns !== null && typeof state.magicDns === 'object' && typeof state.magicDns.url === 'string'
+				? state.magicDns
+				: undefined
+			const mainUrl = named === undefined
+				? (auto ? primary : tokenUrl)
+				: (auto ? named.url : (typeof named.loginUrl === 'string' ? named.loginUrl : named.url))
+			const fallbackUrl = named === undefined ? undefined : (auto ? primary : tokenUrl)
 			const copy = (value, which) => {
 				copyText(value).then(() => {
 					setCopied(which)
@@ -119,15 +132,27 @@ window.__ModuleLoader__.load({
 				h('div', { className: 'dsr-title', key: 'title' }, t('title')),
 				h('div', { className: 'dsr-desc', key: 'desc' }, auto ? t('autoDesc') : t('tokenDesc')),
 				h('div', { className: 'dsr-line', key: 'line' }, [
-					h('code', { className: 'dsr-url', key: 'url' }, auto ? primary : tokenUrl),
+					h('code', { className: 'dsr-url', key: 'url' }, mainUrl),
 					h('button', {
 						className: 'dsr-button',
 						type: 'button',
 						key: 'copy',
-						onClick: () => copy(auto ? primary : tokenUrl, 'main'),
+						onClick: () => copy(mainUrl, 'main'),
 					}, copied === 'main' ? t('copied') : t('copy')),
 				]),
 			]
+			if (fallbackUrl !== undefined) {
+				rows.push(h('div', { className: 'dsr-line dsr-fallback', key: 'fallback' }, [
+					h('span', { className: 'dsr-label', key: 'label' }, t('fallbackLabel')),
+					h('code', { className: 'dsr-url', key: 'url' }, fallbackUrl),
+					h('button', {
+						className: 'dsr-button',
+						type: 'button',
+						key: 'copy',
+						onClick: () => copy(fallbackUrl, 'fallback'),
+					}, copied === 'fallback' ? t('copied') : t('copy')),
+				]))
+			}
 			if (!auto) {
 				rows.push(h('button', {
 					className: 'dsr-button dsr-secondary',

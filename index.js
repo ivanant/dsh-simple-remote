@@ -25,6 +25,13 @@
  *   `webserver/entry-url` table a current Host publishes after the Loader tree
  *   settles, then the older `connection.authenticatedUrl()` accessor. The
  *   newer table is authoritative when both exist.
+ * - The phone-side address is also published by name: the listener asks
+ *   MagicDNS for the full `host.<tailnet>.ts.net` name of the address it bound
+ *   and advertises it only after the name resolves back to that same address,
+ *   so a stale record for a renamed node never sends the phone elsewhere. A
+ *   full name is what a phone can resolve (the bare machine name relies on an
+ *   OS search domain Android does not carry), and the numeric address stays
+ *   beside it as a fallback.
  * - The tailnet port is fixed at 3080 by default instead of mirroring the
  *   loopback GUI, because a Desktop Host binds an OS-assigned loopback port
  *   that changes on every launch. When that port is already taken the plugin
@@ -35,6 +42,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { Resolver, promises as dnsPromises } from 'node:dns'
 import { createServer, request as httpRequest } from 'node:http'
 import { connect as netConnect } from 'node:net'
 import { networkInterfaces } from 'node:os'
@@ -58,6 +66,10 @@ const TAILNET_V4 = /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./
 const TAILNET_INTERFACE = /^tailscale/i
 /** Browser-session cookie prefix owned by `@deepseek-ai/dsh-client-connection`. */
 const COOKIE_PREFIX = 'dsh-auth-'
+/** Tailscale's MagicDNS stub resolver: the authoritative name of every tailnet node. */
+const MAGICDNS_SERVER = '100.100.100.100'
+/** How long a single MagicDNS query may take before the name is considered absent. */
+const MAGICDNS_TIMEOUT = 1200
 /** Request headers that describe one hop and must not be forwarded verbatim. */
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'expect']
 
@@ -104,6 +116,72 @@ function detectAddresses(explicit) {
 /** Bracket an IPv6 literal so it composes into a URL authority. */
 function formatHost(address) {
 	return address.includes(':') ? `[${address}]` : address
+}
+
+/** The `in-addr.arpa` query name for an IPv4 address. */
+function arpaName(address) {
+	return `${address.split('.').reverse().join('.')}.in-addr.arpa`
+}
+
+/**
+ * The PTR rows MagicDNS holds for an address.
+ *
+ * Tailscale runs its own resolver on {@link MAGICDNS_SERVER}; asking it directly
+ * is the only portable way to get the *full* `…ts.net` name, because the host
+ * resolver shortens it to the bare machine name on some platforms (Windows
+ * strips the search domain, which is exactly the form a phone cannot use).
+ * @param address - the tailnet IPv4 address.
+ * @returns the PTR targets, or an empty list when MagicDNS does not answer.
+ */
+function magicDnsPtr(address) {
+	return new Promise((resolve) => {
+		const resolver = new Resolver({ timeout: MAGICDNS_TIMEOUT, tries: 1 })
+		resolver.setServers([MAGICDNS_SERVER])
+		resolver.resolvePtr(arpaName(address), (error, names) => {
+			resolve(error === null || error === undefined ? names ?? [] : [])
+		})
+	})
+}
+
+/**
+ * The MagicDNS name of a tailnet address, in the full `host.<tailnet>.ts.net`
+ * form a phone can actually resolve.
+ *
+ * A candidate is accepted only when it is a fully qualified name that still
+ * points back at this address: a stale `…ts.net` record for a renamed node
+ * keeps resolving (to the node's old address), and advertising it would send
+ * the phone somewhere else entirely.
+ * @param address - the tailnet IPv4 address this listener is bound to.
+ * @returns the verified name, or `undefined` when there is none.
+ */
+async function magicDnsName(address) {
+	/** @type {string[]} */
+	let names = []
+	try {
+		names = await magicDnsPtr(address)
+	} catch {
+		names = []
+	}
+	if (names.length === 0) {
+		// MagicDNS disabled or unreachable: the host resolver may still know the
+		// name, but only trust a qualified one.
+		try {
+			names = await dnsPromises.reverse(address)
+		} catch {
+			names = []
+		}
+	}
+	for (const candidate of names) {
+		const name = String(candidate).replace(/\.$/, '')
+		if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(name)) continue
+		try {
+			const found = await dnsPromises.lookup(name, { all: true })
+			if (found.some((entry) => entry.address === address)) return name
+		} catch {
+			/* A name that does not resolve is not safe to advertise. */
+		}
+	}
+	return undefined
 }
 
 /** The `dsh-auth-…` cookie name this deployment's loopback authority mints. */
@@ -259,6 +337,14 @@ function clientState(state) {
 		autoToken: state.autoToken,
 		urls: [...state.urls],
 		loginUrl: base === undefined ? undefined : withToken(base, state.token),
+		/** The full MagicDNS name of the first address, when one was verified. */
+		magicDns: state.magicDns === undefined
+			? undefined
+			: {
+				name: state.magicDns.name,
+				url: state.magicDns.url,
+				loginUrl: withToken(state.magicDns.url, state.token),
+			},
 		/** The listener that could not bind, so the phone side explains why it is dark. */
 		error: state.error,
 	}
@@ -269,6 +355,15 @@ function announceBase(ctx, state) {
 	if (state.announcedBase || state.urls.length === 0) return
 	state.announcedBase = true
 	const line = `dsh web: tailnet ${state.urls[0]}${state.autoToken ? ' (Tailscale; auto-login)' : ''}`
+	ctx.logger.info(line)
+	if (state.log) console.log(line)
+}
+
+/** Print the MagicDNS name once it is known. */
+function announceMagicDns(ctx, state) {
+	if (state.announcedName || state.magicDns === undefined) return
+	state.announcedName = true
+	const line = `dsh web: tailnet name ${state.magicDns.url} (MagicDNS)`
 	ctx.logger.info(line)
 	if (state.log) console.log(line)
 }
@@ -331,9 +426,12 @@ export function apply(ctx, config) {
 		log: options.log,
 		token: undefined,
 		urls: [],
+		/** The verified `{ name, url }` of the first bound address, once known. */
+		magicDns: undefined,
 		error: undefined,
 		announcedBase: false,
 		announcedToken: false,
+		announcedName: false,
 		warnedNoToken: false,
 	}
 	const servers = []
@@ -412,6 +510,16 @@ export function apply(ctx, config) {
 			const port = typeof assigned === 'object' && assigned !== null ? assigned.port : state.upstreamPort
 			state.urls.push(`http://${formatHost(address)}:${port}/`)
 			announceBase(ctx, state)
+			// A name is nicer to type on a phone than an address, but only a
+			// full MagicDNS name resolves there; resolve it after the listener
+			// is up so a slow resolver never delays the port.
+			if (state.magicDns === undefined) {
+				magicDnsName(address).then((name) => {
+					if (name === undefined || state.magicDns !== undefined) return
+					state.magicDns = { name, url: `http://${name}:${port}/` }
+					announceMagicDns(ctx, state)
+				}).catch(() => {})
+			}
 		})
 		servers.push(server)
 	}
